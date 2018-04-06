@@ -3,30 +3,44 @@ import os
 from glob import glob
 import pandas as pd
 import numpy as np
-import cv2
 import scipy
 from model import *
 from util import *
-
-n_epochs = 1500
+#1500 epoques per ferho en un dia aprox
+n_epochs = 150
 learning_rate_val = 0.0003
 weight_decay_rate = 0.00001
 momentum = 0.9
+#batch size 64
 batch_size = 64
 lambda_recon = 0.9
 lambda_adv = 0.1
 
 overlap_size = 7
 hiding_size = 64
+### DINGO
+# path = '/home/nil/Desktop/TFG/results/'
+# trainset_path = '../data/StreetView_Nil_trainset.pickle'
+# testset_path  = '../data/StreetView_Nil_testset.pickle'
+# dataset_path = '/home/nil/DATASETS/Python_inpainting/Original/'
+# mask_path = '/home/nil/DATASETS/Python_inpainting/Masks/'
+# model_path = '../models/ear_training_1/'
+# result_path= '../results/ear_training_1/'
+# pretrained_model_path = '../models/places/model-ears'
 
-trainset_path = '../data/places_trainset.pickle'
-#trainset_path = ''
-testset_path  = '../data/places_testset.pickle'
-#testset_path  = ''
-dataset_path = '/home/nil/DATASETS/Python_inpainting/Original/'
-model_path = '../models/places/'
-result_path= '../results/places/'
-pretrained_model_path = '../models/places/model-0'
+### PER OpenTrends
+path = '/home/noleart/Escritorio/TFG/results/temporary/'
+trainset_path = '/home/noleart/PycharmProjects/Ear-Accessories_aware_recognition_using_CNNs/data/test_trainset.pickle'
+testset_path  = '/home/noleart/PycharmProjects/Ear-Accessories_aware_recognition_using_CNNs/data/test_testset.pickle'
+
+trainmaskset_path = '/home/noleart/PycharmProjects/Ear-Accessories_aware_recognition_using_CNNs/data/test_trainmaskset.pickle'
+testmaskset_path  = '/home/noleart/PycharmProjects/Ear-Accessories_aware_recognition_using_CNNs/data/test_testmaskset.pickle'
+
+dataset_path = '/home/noleart/Escritorio/TFG/DATASET/Original'
+mask_path = '/home/noleart/Escritorio/TFG/DATASET/Masks/'
+model_path = '/home/noleart/PycharmProjects/Ear-Accessories_aware_recognition_using_CNNs/models'
+result_path= '/home/noleart/Escritorio/TFG/results/inpainted/'
+pretrained_model_path = '../models/places/model-ears'
 
 if not os.path.exists(model_path):
     os.makedirs( model_path )
@@ -41,17 +55,34 @@ if not os.path.exists( trainset_path ) or not os.path.exists( testset_path ):
     print(len(imagenet_images))
     imagenet_images = np.hstack(imagenet_images)
 
+    imagenet_masks = []
+    for dir,_,_, in os.walk(mask_path):
+        imagenet_masks.extend(glob(os.path.join(dir, '*.png')))
+    imagenet_masks = np.hstack(imagenet_masks)
+
     trainset = pd.DataFrame({'image_path':imagenet_images[:int(len(imagenet_images)*0.9)]})
+    trainmaskset = pd.DataFrame({'masks_path':imagenet_masks[:int(len(imagenet_masks))]})
     testset = pd.DataFrame({'image_path':imagenet_images[int(len(imagenet_images)*0.9):]})
+    testmaskset = pd.DataFrame({'masks_path':imagenet_masks[:int(len(imagenet_masks))]})
 
     trainset.to_pickle( trainset_path )
     testset.to_pickle( testset_path )
+    trainmaskset.to_pickle(trainmaskset_path)
+    testmaskset.to_pickle(testmaskset_path)
+
 else:
     trainset = pd.read_pickle( trainset_path )
     testset = pd.read_pickle( testset_path )
+    trainmaskset = pd.read_pickle(trainmaskset_path)
+    testmaskset = pd.read_pickle(testmaskset_path)
+
 
 testset.index = range(len(testset))
 testset = testset.loc[np.random.permutation(len(testset))]
+
+testmaskset.index = range(len(testmaskset))
+#testmaskset = testmaskset.loc[np.r]
+
 is_train = tf.placeholder( tf.bool )
 
 learning_rate = tf.placeholder( tf.float32, [])
@@ -122,25 +153,35 @@ for epoch in range(n_epochs):
     trainset.index = range(len(trainset))
     trainset = trainset.loc[np.random.permutation(len(trainset))]
 
+    trainmaskset.index = range(len(trainmaskset))
+    trainmaskset = trainmaskset.loc[np.random.permutation(len(trainmaskset))]
+
     for start,end in zip(
             range(0, len(trainset), batch_size),
             range(batch_size, len(trainset), batch_size)):
-
         image_paths = trainset[start:end]['image_path'].values
         images_ori = map(lambda x: load_image( x ), image_paths)
-        is_none = np.sum(map(lambda x: x is None, images_ori))
-        if is_none > 0: continue
+        is_none_img = np.sum(map(lambda x: x is None, images_ori))
+        if is_none_img > 0: continue
 
-        images_crops = map(lambda x: crop_random_2(x), images_ori)
-        images, crops,_,_ = zip(*images_crops)
+        mask_paths = trainmaskset[start:end]['masks_path'].values
+        masks_ori = map(lambda y: load_image(y), mask_paths)
+        is_none_mask = np.sum(map(lambda x: x is None, masks_ori))
+        if is_none_mask > 0: continue
+
+        images_crops = map(lambda x, y: crop_random_4(x,y), images_ori, masks_ori )
+        images, crops, _ = zip(*images_crops)
 
         # Printing activations every 10 iterations
         if iters % 100 == 0:
             test_image_paths = testset[:batch_size]['image_path'].values
-            test_images_ori = map(lambda x: load_image(x), test_image_paths)
+            test_mask_paths = trainmaskset[:batch_size]['masks_path'].values
 
-            test_images_crop = map(lambda x: crop_random_2(x, x=32, y=32), test_images_ori)
-            test_images, test_crops, xs,ys = zip(*test_images_crop)
+            test_images_ori = map(lambda x: load_image(x), test_image_paths)
+            test_masks_ori = map(lambda y: load_image(y), test_mask_paths)
+
+            test_images_crop = map(lambda x, y: crop_random_4(x, y, x=32, y=32), test_images_ori, test_masks_ori)
+            test_images, test_crops, masks_ = zip(*test_images_crop)
 
             reconstruction_vals, recon_ori_vals, bn1_val,bn2_val,bn3_val,bn4_val,bn5_val,bn6_val,debn4_val, debn3_val, debn2_val, debn1_val, loss_G_val, loss_D_val = sess.run(
                     [reconstruction, reconstruction_ori, bn1,bn2,bn3,bn4,bn5,bn6,debn4, debn3, debn2, debn1, loss_G, loss_D],
@@ -151,15 +192,30 @@ for epoch in range(n_epochs):
                         })
 
             # Generate result every 1000 iterations
-            if iters % 500 == 0: #500 usually
+            if iters % 100 == 0: #500 usually
                 ii = 0
-                for rec_val, img,x,y in zip(reconstruction_vals, test_images, xs, ys):
+                for rec_val, img, mask_crop, mask in zip(reconstruction_vals, test_images, test_crops, masks_):
                     rec_hid = (255. * (rec_val+1)/2.).astype(int)
                     rec_con = (255. * (img+1)/2.).astype(int)
+                    #TODO _result surt en gris, cal mirar pq.
+                    # Reconstructed + hole_img, una de les dues aporta gris
+                    # Reconstructed =
+                    scipy.misc.imsave(os.path.join(path, str(ii) + '_rec_hid' + str(int(iters/100))+'.png'), rec_hid)
+                    #scipy.misc.imsave(os.path.join(path, str(ii) + '_mask' + '.png'), mask)
+                    reconstructed = np.multiply(rec_hid, mask)
+                    #scipy.misc.imsave(os.path.join(path, str(ii)+'_reconstructed'+'.png'), reconstructed)
 
-                    rec_con[0:64, 32:32+64] = rec_hid
-                    #cv2.imwrite( os.path.join(result_path, 'img_'+str(ii)+'.'+str(int(iters/100))+'.jpg'), rec_con)
-                    scipy.misc.imsave(os.path.join(result_path, 'img_'+str(ii)+'.'+str(int(iters/100))+'.png'), rec_con)
+                    mask_crop = skimage.transform.resize(mask_crop, [128, 128])
+                    scipy.misc.imsave(os.path.join(path, str(ii) + '_mask_crop' + '.png'), mask_crop)
+
+                    hole_img = img - mask_crop
+                    hole_img = skimage.transform.resize(hole_img, [64, 64])
+                    inpainted_img = reconstructed + hole_img * 255.
+
+                    #scipy.misc.imsave(os.path.join(path,str(ii) + '_original' +'.png'), img)
+                    #scipy.misc.imsave(os.path.join(path, str(ii) +'_masked' + '.png'), hole_img)
+                    #scipy.misc.imsave(os.path.join(path, str(ii) +'_result' + '.png'), inpainted_img)
+                    scipy.misc.imsave(os.path.join(result_path, 'img_'+str(ii)+'.'+str(int(iters/100))+'.png'), inpainted_img)
                     ii += 1
                     if ii > 50: break
 
@@ -167,7 +223,7 @@ for epoch in range(n_epochs):
                     ii = 0
                     for test_image in test_images_ori:
                         test_image = (255. * (test_image+1)/2.).astype(int)
-                        test_image[0:64,32:32+64] = 0
+                        #test_image[0:64,32:32+64] = 0
                         #CHANGED TO SCIPY because RGBA, CV does BGR
                         #cv2.imwrite( os.path.join(result_path, 'img_'+str(ii)+'.ori.jpg'), test_image)
                         scipy.misc.imsave( os.path.join(result_path, 'img_'+str(ii)+'.ori.png'), test_image)
@@ -221,6 +277,3 @@ for epoch in range(n_epochs):
     if epoch%100==0:
         saver.save(sess, model_path + 'model', global_step=epoch)
     learning_rate_val *= 0.99
-
-
-
